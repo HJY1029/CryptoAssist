@@ -5,7 +5,7 @@ import os
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
     base_url="https://api.openai.com/v1",
-    如果需要代理，这里配置，比如：
+    #如果需要代理，这里配置，比如：
     http_client_args={
         "proxies": {
             "http://": "http://192.168.238.1:7890",
