@@ -1,6 +1,9 @@
 import argparse
 from assistants import openssl_helper, gmssl_helper, test_runner
+from dotenv import load_dotenv
+load_dotenv()  # 加载.env文件里的环境变量
 
+api_key = os.getenv("OPENAI_API_KEY")
 def main():
     parser = argparse.ArgumentParser(description="CryptoAssist CLI")
     parser.add_argument("prompt", help="自然语言描述（如：用 AES 加密一段消息）")
