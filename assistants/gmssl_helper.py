@@ -1,141 +1,168 @@
 import requests
 import json
 import subprocess
-import tempfile
 import os
 import re
 
 class GmSSLHelper:
-    def __init__(self, api_key):
-        if not self._validate_api_key(api_key):
-            raise ValueError("API Key格式无效（长度需至少32位）")
+    def __init__(self, api_key, algorithm):
         self.api_key = api_key
+        self.algorithm = algorithm  # 仅支持SM4
         self.api_url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.work_dir = os.path.join(os.getcwd(), f"{algorithm}_workdir")
+        os.makedirs(self.work_dir, exist_ok=True)
+        self.generated_code = None
 
-    # 关键修改：仅验证长度
-    def _validate_api_key(self, api_key):
-        """仅验证API Key长度是否≥32位，不限制字符类型"""
-        return bool(api_key and len(api_key) >= 32)
+    def _generate_c_code(self):
+        """生成完全匹配GmSSL 3.2.1接口的SM4代码"""
+        code_template = """#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <gmssl/sm4.h>
+#include <gmssl/error.h>
 
-    def extract_c_code(self, raw_text):
-        start_tag = "```c"
-        end_tag = "```"
-        start_idx = raw_text.find(start_tag)
-        end_idx = raw_text.find(end_tag, start_idx + len(start_tag))
-        
-        if start_idx != -1 and end_idx != -1:
-            return raw_text[start_idx + len(start_tag) : end_idx].strip()
-        return raw_text.strip()
+int main() {
+    char plaintext[1024] = {0};
+    uint8_t key[SM4_KEY_SIZE] = "0123456789abcdef";  // 16字节密钥
+    uint8_t ctr[SM4_BLOCK_SIZE] = {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
+                                  0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f};  // 16字节计数器(CTR模式)
+    SM4_KEY sm4_key;
 
-    def fix_syntax_errors(self, code):
-        lines = code.split('\n')
-        fixed_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped and not stripped.endswith((';', '{', '}', '//')) and '#' not in stripped:
-                line += ';'
-            fixed_lines.append(line)
-        code = '\n'.join(fixed_lines)
-        
-        if 'SM4_KEY' in code and 'len' not in code:
-            code = re.sub(r'(unsigned char plaintext.*;)', r'\1\n    size_t len = strlen((const char *)plaintext);', code)
-        
-        if 'fgets(plaintext' not in code:
-            input_code = """
-    printf("请输入要加密的明文: ");
-    fgets(plaintext, sizeof(plaintext), stdin);
+    // 读取输入
+    //printf("请输入要加密的明文: ");
+    fflush(stdout);
+    if (fgets(plaintext, sizeof(plaintext), stdin) == NULL) {
+        printf("错误：读取输入失败\\n");
+        return 1;
+    }
     plaintext[strcspn(plaintext, "\\n")] = '\\0';
-"""
-            code = re.sub(r'(int main\(\)\s*\{\s*)', r'\1char plaintext[1024];\n' + input_code, code)
-        
-        return code
 
-    def generate_c_code(self, prompt):
+    // 空输入检查
+    if (strlen(plaintext) == 0) {
+        printf("错误：明文不能为空\\n");
+        return 1;
+    }
+
+    // 计算填充长度（SM4块大小16字节）
+    size_t text_len = strlen(plaintext);
+    size_t padded_len = ((text_len + SM4_BLOCK_SIZE - 1) / SM4_BLOCK_SIZE) * SM4_BLOCK_SIZE;
+    uint8_t *padded = (uint8_t*)malloc(padded_len);
+    if (!padded) {
+        printf("错误：内存分配失败\\n");
+        return 1;
+    }
+    memcpy(padded, plaintext, text_len);
+    memset(padded + text_len, 0, padded_len - text_len);  // 填充0
+
+    // 初始化加密密钥（GmSSL 3.2.1无返回值）
+    sm4_set_encrypt_key(&sm4_key, key);
+
+    // 分配密文缓冲区
+    uint8_t *ciphertext = (uint8_t*)malloc(padded_len);
+    if (!ciphertext) {
+        printf("错误：内存分配失败\\n");
+        free(padded);
+        return 1;
+    }
+
+    // CTR模式加密（严格匹配GmSSL 3.2.1函数参数）
+    // 函数原型：void sm4_ctr_encrypt(const SM4_KEY *key, uint8_t ctr[16], const uint8_t *in, size_t inlen, uint8_t *out)
+    sm4_ctr_encrypt(&sm4_key, ctr, padded, padded_len, ciphertext);
+
+    // 输出结果
+    printf("明文: %s\\n", plaintext);
+    printf("密文(十六进制): ");
+    for (size_t i = 0; i < padded_len; i++) {
+        printf("%02x", ciphertext[i]);
+    }
+    printf("\\n加密完成\\n");
+
+    // 释放资源
+    free(padded);
+    free(ciphertext);
+    return 0;
+}
+"""
+
+        system_prompt = """生成纯C代码，严格匹配GmSSL 3.2.1的SM4接口：
+        1. sm4_ctr_encrypt函数参数格式：(密钥, 计数器, 明文, 长度, 密文)
+        2. 不添加多余参数，函数原型为：void sm4_ctr_encrypt(const SM4_KEY *key, uint8_t ctr[16], const uint8_t *in, size_t inlen, uint8_t *out)
+        3. 使用SM4_BLOCK_SIZE和SM4_KEY_SIZE宏
+        4. 只返回可编译的纯代码，无注释和解释"""
+
         payload = {
             "model": "glm-3-turbo",
             "messages": [
-                {
-                    "role": "system",
-                    "content": """生成基于GmSSL的SM4加密C程序，包含：
-                    1. 头文件：#include <gmssl/sm4.h>、#include <stdio.h>、#include <string.h>
-                    2. 终端输入明文
-                    3. 正确的密钥和缓冲区定义
-                    4. 完整的加密流程
-                    5. 输出明文和十六进制密文
-                    """
-                },
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.0
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"生成SM4加密代码，基于模板：\n{code_template}"}
+            ]
         }
-        
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
-        
+
         try:
             response = requests.post(
                 self.api_url,
                 headers=headers,
-                data=json.dumps(payload),
+                json=payload,
                 timeout=30
             )
-            response_data = response.json()
+            response.raise_for_status()
+            raw_code = response.json()["choices"][0]["message"]["content"]
             
-            if response.status_code == 200 and "choices" in response_data:
-                raw_code = response_data["choices"][0]["message"]["content"]
-                clean_code = self.extract_c_code(raw_code)
-                return self.fix_syntax_errors(clean_code)
-            else:
-                return f"API错误：{response_data.get('error', {}).get('message', '未知错误')}"
+            clean_code = re.sub(r'```c|\n```|//.*$', '', raw_code, flags=re.MULTILINE)
+            self.generated_code = clean_code.strip()
+            return self.generated_code, "代码生成完成"
         except Exception as e:
-            return f"生成失败：{str(e)}"
+            return "", f"API请求失败: {str(e)}"
 
-    def compile_and_run(self, code):
-        if not code or code.startswith(("API错误", "生成失败")):
-            return "代码生成失败，无法编译运行"
-        
-        code_path = os.path.join(self.temp_dir.name, "sm4_code.c")
-        exec_path = os.path.join(self.temp_dir.name, "sm4_exec")
-        
+    def _compile_and_run(self, code=None):
+        c_code = code or self.generated_code
+        if not c_code:
+            return "没有有效的代码可运行"
+
+        code_path = os.path.join(self.work_dir, "sm4_encrypt.c")
         with open(code_path, "w") as f:
-            f.write(code)
-        
-        compile_cmd = f"gcc {code_path} -o {exec_path} -lgmssl"
+            f.write(c_code)
+
+        exec_path = os.path.join(self.work_dir, "sm4_encrypt")
+        compile_cmd = (
+            f"gcc {code_path} -o {exec_path} "
+            f"-I/usr/local/include -L/usr/local/lib "
+            f"-lgmssl -Wl,-rpath=/usr/local/lib"
+        )
+
         compile_result = subprocess.run(
             compile_cmd,
             shell=True,
             capture_output=True,
             text=True
         )
-        
         if compile_result.returncode != 0:
-            return f"编译失败：\n{compile_result.stderr}"
-        
-        run_result = subprocess.run(
-            exec_path,
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        
-        return f"运行成功：\n{run_result.stdout}" if run_result.returncode == 0 else f"运行失败：\n{run_result.stderr}"
+            return (f"编译失败:\n{compile_result.stderr}\n"
+                    f"确认GmSSL版本正确：\n"
+                    f"cd GmSSL && git checkout v3.2.1 && make clean && make && sudo make install\n"
+                    f"sudo ldconfig /usr/local/lib")
+
+        os.chmod(exec_path, 0o755)
+        print("\n📌 请在下方输入要加密的明文：")
+        try:
+            exit_code = os.system(exec_path)
+            return "加密完成" if exit_code == 0 else f"运行出错，退出代码: {exit_code}"
+        except Exception as e:
+            return f"运行失败: {str(e)}"
+
+    def process(self, generate_only=True, code=None):
+        if generate_only:
+            return self._generate_c_code()
+        else:
+            result = self._compile_and_run(code)
+            return "", result
 
 
-def generate_gmssl_code(prompt, api_key):
-    try:
-        helper = GmSSLHelper(api_key)
-        c_code = helper.generate_c_code(prompt)
-        
-        if not c_code.startswith(("API错误", "生成失败")):
-            run_result = helper.compile_and_run(c_code)
-            return c_code, run_result
-        return c_code, "未生成可编译代码"
-    except ValueError as e:
-        return "", f"API Key错误：{str(e)}"
-    except Exception as e:
-        return "", f"程序错误：{str(e)}"
-    
-
+def generate_gmssl_code(prompt, algorithm, api_key, generate_only=True, code=None):
+    helper = GmSSLHelper(api_key, algorithm)
+    return helper.process(generate_only, code)
