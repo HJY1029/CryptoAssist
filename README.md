@@ -1,6 +1,6 @@
 # CryptoAssist - 加密算法代码生成与运行工具
 
-CryptoAssist 是一个基于 OpenSSL 库的加密算法代码生成与运行工具，能够自动生成多种加密算法（如 DES、AES、RSA 、SM4等）的 C 语言代码，并支持编译和运行，帮助开发者快速实现加密功能。
+CryptoAssist 是一个基于 OpenSSL、GmSSL库的加密算法代码生成与运行工具，能够自动生成多种加密算法（如 DES、AES、RSA 、SM4等）的 C 语言代码，并支持编译和运行，帮助开发者快速实现加密功能。
 
 ## 项目简介
 
@@ -10,7 +10,9 @@ CryptoAssist 通过调用大语言模型 API（当前使用 glm-3-turbo）生成
 
 - 自动生成多种加密算法的 C 语言代码
 - 支持 DES 多种模式（ECB、CBC、CFB、OFB）
-- 支持 AES-CBC 和 RSA 加密算法
+- 支持 DES 多种模式（ECB、CBC、CFB、OFB）
+- 支持 RSA 加密算法
+- 支持 SM4 加密算法
 - 自动处理代码中的常见错误（如变量类型、函数参数等）
 - 一键编译并运行生成的代码
 - 包含错误重试机制，提高代码生成成功率
@@ -35,14 +37,14 @@ CryptoAssist 通过调用大语言模型 API（当前使用 glm-3-turbo）生成
 
 ## 安装步骤
 
-### 1. Clone Repo
+### 1. 克隆仓库
 
 ```bash
 git clone https://github.com/HJY1029/CryptoAssist.git
 cd CryptoAssist
 ```
 
-### 2. Set Up Python Environment
+### 2. 搭建Python环境
 
 ```bash
 sudo apt update && sudo apt install python3-pip python3-venv -y
@@ -51,7 +53,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Install OpenSSL & GmSSL
+### 3. 安装OpenSSL 和 GmSSL
 
 #### OpenSSL
 
@@ -82,15 +84,6 @@ sudo make install
 pip install -r requirements.txt
 ```
 
-隆项目代码库：
-
-```bash
-git clone https://github.com/yourusername/CryptoAssist.git
-cd CryptoAssist
-```
-
-> 注：API 密钥需要从 [[智谱AI开放平台](https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys)](https://open.bigmodel.cn/) 获取
-
 ## 使用方法
 
 ### 基本使用流程
@@ -107,7 +100,9 @@ cd CryptoAssist
 python cli.py "DES-CBC" --backend openssl
 ```
 
-#### AES 加密示例
+> 注：API 密钥需要从 [[智谱AI开放平台](https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys)](https://open.bigmodel.cn/) 获取
+
+#### AES-CBC 加密示例
 
 ```shell
 python cli.py "AES-CBC" --backend openssl
@@ -119,7 +114,7 @@ python cli.py "AES-CBC" --backend openssl
 python cli.py "RSA" --backend openssl
 ```
 
-#### SM4 加密示例
+#### SM4-ECB 加密示例
 
 ```shell
 python cli.py "SM4-ECB" --backend gmssl
@@ -148,7 +143,7 @@ CryptoAssist/
 │   ├── aes_ecb_helper.py     # AES-ECB模式助手
 │   ├── rsa_helper.py         # RSA模式助手
 │   └── gmssl_helper.py       # GMSSL助手（支持SM4-ECB,SM4-CBC）
-├── des_cbc_workdir/          # DES-CBC工作目录（生成的代码和可执行文件）
+├── des_cbc_workdir/          # DES-CBC工作目录（编译过程中生成的代码和可执行文件）
 ├── des_cfb_workdir/          # DES-CFB工作目录
 ├── des_ofb_workdir/          # DES-OFB工作目录
 ...
