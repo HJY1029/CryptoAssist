@@ -21,7 +21,7 @@ class RSAHelper:
 
     @retry(stop_max_attempt_number=3, wait_fixed=2000)
     def _generate_c_code(self):
-        """生成支持交互式公钥输入的RSA加密代码"""
+        """生成支持从PEM文件读取公钥的RSA加密代码"""
         system_prompt = """仅输出纯C代码，无任何其他内容！
 基于OpenSSL库实现RSA加密，必须满足：
 
@@ -35,26 +35,24 @@ class RSAHelper:
 #include <openssl/bio.h>
 
 2. 核心要求：
-- 公钥通过终端交互式输入（PEM格式文本）
-- 输入公钥时使用逐行读取方式，直到用户输入空行结束
+- 公钥通过PEM格式文件读取（用户输入文件路径）
 - 填充模式：RSA_PKCS1_OAEP_PADDING
-- 输入：PEM格式公钥文本、明文
+- 输入：PEM公钥文件路径、明文
 - 输出：十六进制密文
 
 3. 终端提示必须清晰（关键！）：
-- 打印"请输入PEM格式的RSA公钥（每行输入后按回车，输入空行结束）: "
+- 打印"请输入PEM格式的RSA公钥文件路径: "
 - 打印"请输入要加密的明文: "
 - 明确告知用户输入方式
 
 4. 公钥处理流程：
-1. 创建动态缓冲区存储公钥内容
-2. 使用fgets逐行读取用户输入
-3. 当用户输入空行（仅回车）时结束输入
-4. 用BIO_new_mem_buf创建内存BIO
-5. 用PEM_read_bio_RSA_PUBKEY从内存加载公钥
+1. 接收用户输入的公钥文件路径
+2. 使用fopen打开文件
+3. 用PEM_read_RSA_PUBKEY从文件加载公钥
 
 5. 错误处理：
-- 公钥解析失败提示："无法解析RSA公钥，请检查格式是否正确"
+- 文件打开失败提示："无法打开公钥文件，请检查路径是否正确"
+- 公钥解析失败提示："无法解析RSA公钥，请检查文件格式是否正确"
 - 加密失败提示："RSA加密失败"
 - 内存分配失败提示："内存分配失败"
 
@@ -65,13 +63,13 @@ class RSAHelper:
 
         error_feedback = ""
         if self.last_error:
-            error_feedback = "修复：\n- 必须允许用户逐行输入公钥，直到空行结束\n- 不能使用文件定位方式读取公钥\n- 确保输入流程完整，不跳过公钥输入步骤"
+            error_feedback = "修复：\n- 必须从文件读取公钥，接收用户输入的文件路径\n- 使用fopen打开文件，PEM_read_RSA_PUBKEY读取公钥\n- 确保文件操作错误处理完整"
 
         messages = [{"role": "system", "content": system_prompt}]
         if error_feedback:
             messages.append({"role": "user", "content": error_feedback})
         else:
-            messages.append({"role": "user", "content": "生成支持逐行输入公钥的RSA加密代码"})
+            messages.append({"role": "user", "content": "生成从PEM文件读取公钥的RSA加密代码"})
 
         payload = {
             "model": "glm-3-turbo",
@@ -97,44 +95,32 @@ class RSAHelper:
             # 净化代码并确保关键逻辑
             clean_code = re.sub(r'//.*?\n|/\*.*?\*/|```c|```', '', raw_code, flags=re.DOTALL)
             
-            # 确保公钥输入方式正确
-            if '空行结束' not in clean_code:
-                clean_code = clean_code.replace(
-                    'printf("请输入PEM格式的RSA公钥',
-                    'printf("请输入PEM格式的RSA公钥（每行输入后按回车，输入空行结束）: ',
-                    1
-                )
-            
-            # 确保使用逐行读取方式
-            if 'fgets(line, sizeof(line), stdin)' not in clean_code:
+            # 确保文件读取逻辑正确
+            if 'fopen' not in clean_code:
                 insert_code = """
-    char *pubKeyText = NULL;
-    size_t pubKeySize = 0;
-    char line[1024];
-    
-    // 逐行读取公钥
-    while (1) {
-        if (fgets(line, sizeof(line), stdin) == NULL) break;
-        
-        // 遇到空行则结束输入
-        if (line[0] == '\\n') break;
-        
-        // 动态扩展缓冲区
-        size_t line_len = strlen(line);
-        char *new_buf = realloc(pubKeyText, pubKeySize + line_len + 1);
-        if (!new_buf) {
-            printf("内存分配失败\\n");
-            free(pubKeyText);
-            return 1;
-        }
-        pubKeyText = new_buf;
-        memcpy(pubKeyText + pubKeySize, line, line_len);
-        pubKeySize += line_len;
-        pubKeyText[pubKeySize] = '\\0';
+    char pubKeyPath[1024];
+    FILE *pubKeyFile = NULL;
+    RSA *rsa = NULL;
+    unsigned char *encrypted = NULL;
+    int encryptedLen;
+
+    printf("请输入PEM格式的RSA公钥文件路径: ");
+    if (fgets(pubKeyPath, sizeof(pubKeyPath), stdin) == NULL) {
+        printf("读取路径失败\\n");
+        return 1;
     }
-    
-    if (!pubKeyText || pubKeySize == 0) {
-        printf("未输入公钥内容\\n");
+    pubKeyPath[strcspn(pubKeyPath, "\\n")] = '\\0';
+
+    pubKeyFile = fopen(pubKeyPath, "r");
+    if (!pubKeyFile) {
+        printf("无法打开公钥文件，请检查路径是否正确\\n");
+        return 1;
+    }
+
+    rsa = PEM_read_RSA_PUBKEY(pubKeyFile, NULL, NULL, NULL);
+    fclose(pubKeyFile);
+    if (!rsa) {
+        printf("无法解析RSA公钥，请检查文件格式是否正确\\n");
         return 1;
     }
 """
@@ -150,10 +136,10 @@ class RSAHelper:
         if not c_code:
             return "无代码可编译"
 
-        # 确保输入逻辑正确
+        # 确保提示信息正确
         c_code = c_code.replace(
             'printf("请输入PEM格式的RSA公钥',
-            'printf("请输入PEM格式的RSA公钥（每行输入后按回车，输入空行结束）: '
+            'printf("请输入PEM格式的RSA公钥文件路径: '
         )
 
         code_path = os.path.join(self.work_dir, "rsa_encrypt.c")
@@ -212,4 +198,3 @@ class RSAHelper:
                 return
 
         print(f"⚠️ 已达最大重试次数({self.max_retry})")
-    
